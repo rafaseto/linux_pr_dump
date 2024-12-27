@@ -45,6 +45,52 @@ def fetch_pull_requests():
 
     return pull_requests
 
+
+def fetch_comments_for_pr(pr_id, pull_number):
+    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/issues/{pull_number}/comments"
+    headers = {"Authorization": f"Bearer {GITHUB_TOKEN}"}
+
+    response = requests.get(url, headers=headers)
+    if response.status_code != 200:
+        print(f"Error when trying to get the comments of the PR #{pull_number}: {response.status_code}")
+        return []
+
+    return response.json() 
+
+
+def save_comments_to_postgres(pr_id, comments):
+    try:
+        conn = psycopg2.connect(**DATABASE_CONFIG)
+        cursor = conn.cursor()
+
+        for comment in comments:
+            cursor.execute(
+                """
+                INSERT INTO pr_comments (comment_id, pr_id, body, author, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (comment_id) DO NOTHING;
+                """,
+                (
+                    comment["id"],
+                    pr_id,
+                    comment["body"],
+                    comment["user"]["login"],
+                    comment["created_at"],
+                    comment["updated_at"],
+                ),
+            )
+
+        conn.commit()
+        print(f"{len(comments)} comments inserted for the PR {pr_id}")
+
+    except Exception as e:
+        print(f"Error when saving the comments: {e}")
+
+    finally:
+        cursor.close()
+        conn.close()
+
+
 # Função para armazenar dados no PostgreSQL
 def save_to_postgres(pull_requests):
     try:
@@ -56,6 +102,8 @@ def save_to_postgres(pull_requests):
 
         # Iterando sobre cada pull request
         for pr in pull_requests:
+            pr_id = pr["id"]
+            pull_number = pr["number"]
             # Inserindo os dados de um pr na tabela
             cursor.execute(
                 """
@@ -75,6 +123,9 @@ def save_to_postgres(pull_requests):
                     f"{REPO_OWNER}/{REPO_NAME}",
                 ),
             )
+
+            comments = fetch_comments_for_pr(pr_id, pull_number)
+            save_comments_to_postgres(pr_id, comments)
 
         # Confirmando mudanças
         conn.commit()
